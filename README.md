@@ -16,6 +16,16 @@ OpenCode auto-installs the plugin from npm on next launch.
 
 If you're logged into the Claude CLI (`claude login`), the plugin auto-syncs your credentials — just select an Anthropic model and start chatting. If not, you'll be prompted to authenticate via browser OAuth or enter an API key.
 
+**Upgrade:**
+
+OpenCode pins the installed version. To upgrade to the latest:
+
+```bash
+cd ~/.cache/opencode && npm install opencode-claude-bridge@latest
+```
+
+Then restart OpenCode.
+
 <details>
 <summary>Install from source</summary>
 
