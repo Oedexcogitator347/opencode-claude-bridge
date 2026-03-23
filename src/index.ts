@@ -155,9 +155,13 @@ const AnthropicOAuthCombined = async ({ client }: { client: PluginClient }) => {
             };
           }
 
+          // Temporarily clear env var so SDK doesn't use it over our OAuth token
+          const savedApiKey = process.env.ANTHROPIC_API_KEY;
+          delete process.env.ANTHROPIC_API_KEY;
+
           return {
-            // Empty apiKey tells SDK not to set x-api-key; our fetch sets Bearer
-            apiKey: "",
+            // authToken tells SDK to use Authorization: Bearer (skips x-api-key)
+            authToken: auth.access,
 
             async fetch(
               input: string | URL | Request,
