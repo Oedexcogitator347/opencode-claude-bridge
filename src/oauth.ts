@@ -89,22 +89,19 @@ export function createAuthorizationRequest(
 ): { url: string; verifier: string } {
   const verifier = base64url(randomBytes(64));
   const challenge = base64url(createHash("sha256").update(verifier).digest());
+  const state = base64url(randomBytes(16));
 
   const params = new URLSearchParams({
-    code: "true",
     response_type: "code",
     client_id: CLIENT_ID,
     redirect_uri: redirectUri || REDIRECT_URI,
     scope: SCOPES,
     code_challenge: challenge,
     code_challenge_method: "S256",
-    state: verifier,
+    state,
   });
 
-  return {
-    url: `${AUTHORIZE_URL}?${params}`,
-    verifier,
-  };
+  return { url: `${AUTHORIZE_URL}?${params}`, verifier };
 }
 
 export function parseAuthCode(raw: string): string {
@@ -138,7 +135,6 @@ export function exchangeCodeForTokens(
     code_verifier: verifier,
     client_id: CLIENT_ID,
     redirect_uri: redirectUri || REDIRECT_URI,
-    state: verifier,
   });
   return parseTokenResponse(status, body, "Token exchange");
 }

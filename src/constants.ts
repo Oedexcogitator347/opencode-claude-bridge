@@ -43,7 +43,7 @@ export const REDIRECT_URI =
 // Extended scopes covering all Claude Code capabilities
 export const SCOPES =
   process.env.ANTHROPIC_SCOPES ||
-  "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
+  "org:create_api_key user:profile user:inference";
 
 export const CLI_VERSION =
   process.env.ANTHROPIC_CLI_VERSION || detectClaudeVersion();

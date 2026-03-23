@@ -160,15 +160,20 @@ const OpenCodeClaudeBridge = async ({ client }: { client: PluginClient }) => {
           try {
             const tokens = getClaudeTokens();
             if (tokens) {
-              console.error("[opencode-oauth] Auto-synced credentials from Claude CLI");
               await storeAuth(client, tokens);
               auth = { type: "oauth", ...tokens };
             }
           } catch {}
         }
 
+        // API key mode — set the key in env and let the SDK handle everything
+        if (auth.type === "apikey" && auth.access) {
+          process.env.ANTHROPIC_API_KEY = auth.access;
+          return {};
+        }
+
         if (auth.type !== "oauth") {
-          // Not OAuth — restore API key for non-OAuth providers
+          // Not configured — restore env API key if present so SDK can use it
           if (savedApiKey) process.env.ANTHROPIC_API_KEY = savedApiKey;
           return {};
         }
@@ -360,17 +365,65 @@ const OpenCodeClaudeBridge = async ({ client }: { client: PluginClient }) => {
           authorize: async () => {
             const tokens = getClaudeTokens();
             if (tokens) {
-              return { type: "success" as const, ...tokens };
+              await storeAuth(client, tokens);
+              return {
+                instructions: "✓ Connected via Claude CLI — press Esc to close",
+                method: "code" as const,
+                callback: async () => ({ type: "success" as const, ...tokens }),
+              };
             }
 
             const { url, verifier } = createAuthorizationRequest();
+
+            // Best-effort browser open — try launchctl asuser (escapes sidecar sandbox),
+            // plain open, and osascript in order. Also write a .command file to Desktop.
+            (async () => {
+              const { execFileSync } = await import("node:child_process");
+              const { writeFileSync, chmodSync } = await import("node:fs");
+              const { homedir } = await import("node:os");
+              const { join } = await import("node:path");
+
+              if (process.platform === "darwin") {
+                // Write .command file to Desktop as a guaranteed fallback
+                try {
+                  const safe = url.replace(/'/g, "'\\''");
+                  const script = `#!/bin/bash\n/usr/bin/open '${safe}'\nrm -f "$0"\n`;
+                  const scriptPath = join(homedir(), "Desktop", "opencode-oauth.command");
+                  writeFileSync(scriptPath, script);
+                  chmodSync(scriptPath, 0o755);
+                } catch {}
+
+                // Try to open browser directly
+                const uid = String(process.getuid?.() ?? "");
+                const attempts: Array<() => void> = [
+                  () => execFileSync("/bin/launchctl", ["asuser", uid, "/usr/bin/open", url], { timeout: 5000 }),
+                  () => execFileSync("/usr/bin/open", [url], { timeout: 3000 }),
+                  () => execFileSync("/usr/bin/osascript", ["-e", `open location "${url}"`], { timeout: 3000 }),
+                ];
+                for (const attempt of attempts) {
+                  try { attempt(); break; } catch {}
+                }
+              } else if (process.platform === "win32") {
+                try { execFileSync("cmd", ["/c", "start", url], { timeout: 3000 }); } catch {}
+              } else {
+                const attempts: Array<() => void> = [
+                  () => execFileSync("/usr/bin/xdg-open", [url], { timeout: 3000 }),
+                  () => execFileSync("/usr/bin/open", [url], { timeout: 3000 }),
+                ];
+                for (const attempt of attempts) {
+                  try { attempt(); break; } catch {}
+                }
+              }
+            })().catch(() => {});
+
             return {
               url,
-              instructions: "A browser window will open — log in to Claude, then paste the authorization code below:",
+              instructions: `Opening browser… If nothing opens, double-click 'opencode-oauth.command' on your Desktop, then paste the authorization code below:\n\n${url}`,
               method: "code" as const,
               callback: async (code: string) => {
                 try {
                   const tokens = exchangeCodeForTokens(parseAuthCode(code), verifier);
+                  await storeAuth(client, tokens);
                   return { type: "success" as const, ...tokens };
                 } catch {
                   return { type: "failed" as const };
@@ -380,9 +433,37 @@ const OpenCodeClaudeBridge = async ({ client }: { client: PluginClient }) => {
           },
         },
         {
-          provider: "anthropic",
-          label: "API Key",
-          type: "api" as const,
+          label: "Claude API Key",
+          type: "oauth" as const,
+          authorize: async () => {
+            // Auto-detect from environment
+            const envKey = process.env.ANTHROPIC_API_KEY || savedApiKey;
+            if (envKey) {
+              await client.auth.set({
+                path: { id: "anthropic" },
+                body: { type: "apikey", access: envKey, expires: Date.now() + 365 * 24 * 60 * 60 * 1000 },
+              });
+              return {
+                instructions: "✓ API key found in environment — press Esc to close",
+                method: "code" as const,
+                callback: async () => ({ type: "success" as const, access: envKey, refresh: "", expires: Date.now() + 365 * 24 * 60 * 60 * 1000 }),
+              };
+            }
+            // Prompt user to paste key
+            return {
+              instructions: "Paste your Anthropic API key (sk-ant-...):",
+              method: "code" as const,
+              callback: async (key: string) => {
+                const k = key.trim();
+                if (!k) return { type: "failed" as const };
+                await client.auth.set({
+                  path: { id: "anthropic" },
+                  body: { type: "apikey", access: k, expires: Date.now() + 365 * 24 * 60 * 60 * 1000 },
+                });
+                return { type: "success" as const, access: k, refresh: "", expires: Date.now() + 365 * 24 * 60 * 60 * 1000 };
+              },
+            };
+          },
         },
       ],
     },
