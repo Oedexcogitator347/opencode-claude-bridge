@@ -34,29 +34,118 @@ type PluginClient = {
   };
 };
 
-type PluginInput = {
-  model?: { providerID?: string };
-};
-
-type PluginOutput = {
-  system: string[];
-};
-
 const AnthropicOAuthCombined = async ({ client }: { client: PluginClient }) => {
+  // Track current OAuth state for header injection
+  let currentAuth: AuthType = { type: "none" };
+
   return {
+    // --- System prompt: prepend Claude Code identity ---
     "experimental.chat.system.transform": (
-      input: PluginInput,
-      output: PluginOutput,
+      input: { model?: { providerID: string } },
+      output: { system: string[] },
     ) => {
       if (input.model?.providerID === "anthropic") {
         const prefix =
           "You are Claude Code, Anthropic's official CLI for Claude.";
         if (output.system.length > 0) {
+          output.system[0] = output.system[0]
+            .replace(/OpenCode/g, "Claude Code")
+            .replace(/opencode/gi, "Claude");
           output.system[0] = `${prefix}\n\n${output.system[0]}`;
         } else {
           output.system.push(prefix);
         }
       }
+    },
+
+    // --- Header injection: exact Claude Code 2.1.81 headers ---
+    "chat.headers": async (
+      input: { model?: { providerID: string } },
+      output: { headers: Record<string, string> },
+    ) => {
+      if (input.model?.providerID !== "anthropic") return;
+      if (currentAuth.type !== "oauth") return;
+
+      // Layered token refresh if expired
+      if (
+        !currentAuth.access ||
+        !currentAuth.expires ||
+        currentAuth.expires < Date.now()
+      ) {
+        let fresh: {
+          access: string;
+          refresh: string;
+          expires: number;
+        } | null = null;
+
+        // Layer 1: Claude CLI keychain
+        try {
+          const keychainTokens = getClaudeTokens();
+          if (keychainTokens && keychainTokens.expires > Date.now() + 60_000) {
+            fresh = keychainTokens;
+          }
+        } catch {}
+
+        // Layer 2: Stored refresh token
+        if (!fresh && currentAuth.refresh) {
+          try {
+            fresh = refreshTokens(currentAuth.refresh);
+          } catch {}
+        }
+
+        // Layer 3: CLI refresh token
+        if (!fresh) {
+          try {
+            const creds = readClaudeCredentials();
+            if (creds?.claudeAiOauth?.refreshToken) {
+              fresh = refreshTokens(creds.claudeAiOauth.refreshToken);
+            }
+          } catch {}
+        }
+
+        if (fresh) {
+          await client.auth.set({
+            path: { id: "anthropic" },
+            body: {
+              type: "oauth",
+              refresh: fresh.refresh,
+              access: fresh.access,
+              expires: fresh.expires,
+            },
+          });
+          currentAuth.access = fresh.access;
+          currentAuth.refresh = fresh.refresh;
+          currentAuth.expires = fresh.expires;
+        }
+      }
+
+      // OAuth auth header
+      output.headers["authorization"] = `Bearer ${currentAuth.access}`;
+      delete output.headers["x-api-key"];
+
+      // Identity headers
+      output.headers["user-agent"] = USER_AGENT;
+      output.headers["x-app"] = "cli";
+      output.headers["anthropic-dangerous-direct-browser-access"] = "true";
+
+      // Stainless SDK headers
+      for (const [k, v] of Object.entries(STAINLESS_HEADERS)) {
+        output.headers[k] = v;
+      }
+      output.headers["x-stainless-retry-count"] =
+        output.headers["x-stainless-retry-count"] || "0";
+      output.headers["x-stainless-timeout"] =
+        output.headers["x-stainless-timeout"] || "600";
+
+      // Beta flags: merge required + oauth + any existing
+      const existing = (output.headers["anthropic-beta"] || "")
+        .split(",")
+        .map((b) => b.trim())
+        .filter(Boolean);
+      const required = BETA_FLAGS.split(",").map((b) => b.trim());
+      output.headers["anthropic-beta"] = [
+        ...new Set([...required, OAUTH_BETA_FLAG, ...existing]),
+      ].join(",");
     },
 
     auth: {
@@ -93,9 +182,12 @@ const AnthropicOAuthCombined = async ({ client }: { client: PluginClient }) => {
               };
             }
           } catch {
-            // Keychain unavailable — user will need to auth manually
+            // Keychain unavailable
           }
         }
+
+        // Store auth state for chat.headers hook
+        currentAuth = auth;
 
         if (auth.type === "oauth") {
           // Zero out cost for Pro/Max subscription
@@ -108,181 +200,26 @@ const AnthropicOAuthCombined = async ({ client }: { client: PluginClient }) => {
           }
 
           return {
-            apiKey: "",
-
-            async fetch(input: string | URL | Request, init?: RequestInit) {
-              const auth = await getAuth();
-              if (auth.type !== "oauth") return fetch(input, init);
-
-              // --- Layered token refresh ---
-              if (
-                !auth.access ||
-                !auth.expires ||
-                auth.expires < Date.now()
-              ) {
-                let fresh: {
-                  access: string;
-                  refresh: string;
-                  expires: number;
-                } | null = null;
-
-                // Layer 1: Fresh tokens from Claude CLI keychain
-                try {
-                  const keychainTokens = getClaudeTokens();
-                  if (
-                    keychainTokens &&
-                    keychainTokens.expires > Date.now() + 60_000
-                  ) {
-                    console.error(
-                      "[opencode-oauth] Synced fresh token from Claude CLI",
-                    );
-                    fresh = keychainTokens;
-                  }
-                } catch {
-                  // Keychain unavailable
-                }
-
-                // Layer 2: OAuth refresh with our stored refresh token
-                if (!fresh && auth.refresh) {
-                  try {
-                    console.error(
-                      "[opencode-oauth] Refreshing via stored refresh token...",
-                    );
-                    fresh = refreshTokens(auth.refresh);
-                  } catch (err) {
-                    console.error(
-                      `[opencode-oauth] Stored refresh failed: ${err}`,
-                    );
-                  }
-                }
-
-                // Layer 3: OAuth refresh with Claude CLI's refresh token
-                if (!fresh) {
-                  try {
-                    const creds = readClaudeCredentials();
-                    if (creds?.claudeAiOauth?.refreshToken) {
-                      console.error(
-                        "[opencode-oauth] Trying Claude CLI refresh token...",
-                      );
-                      fresh = refreshTokens(creds.claudeAiOauth.refreshToken);
-                    }
-                  } catch (err) {
-                    console.error(
-                      `[opencode-oauth] CLI refresh also failed: ${err}`,
-                    );
-                  }
-                }
-
-                if (fresh) {
-                  await client.auth.set({
-                    path: { id: "anthropic" },
-                    body: {
-                      type: "oauth",
-                      refresh: fresh.refresh,
-                      access: fresh.access,
-                      expires: fresh.expires,
-                    },
-                  });
-                  auth.access = fresh.access;
-                }
+            // Pass authToken so SDK uses Bearer auth
+            authToken: auth.access,
+            // Override URL to add ?beta=true
+            buildRequestUrl: (baseURL: string) => `${baseURL}/messages?beta=true`,
+            // Pass our custom fetch for body transformation + retry
+            async fetch(
+              input: string | URL | Request,
+              init?: RequestInit,
+            ) {
+              // Re-read auth for freshness
+              const freshAuth = await getAuth();
+              if (freshAuth.type === "oauth") {
+                currentAuth = freshAuth;
               }
-
-              // --- Build headers ---
-              const headers = new Headers();
-
-              if (input instanceof Request) {
-                input.headers.forEach((v, k) => headers.set(k, v));
-              }
-
-              if (init?.headers) {
-                const h = init.headers;
-                if (h instanceof Headers) {
-                  h.forEach((v, k) => headers.set(k, v));
-                } else if (Array.isArray(h)) {
-                  for (const [k, v] of h) {
-                    if (v !== undefined) headers.set(k, String(v));
-                  }
-                } else {
-                  for (const [k, v] of Object.entries(h)) {
-                    if (v !== undefined) headers.set(k, String(v));
-                  }
-                }
-              }
-
-              // --- Exact Claude Code 2.1.81 headers ---
-
-              // Auth: OAuth Bearer token, remove API key
-              headers.set("authorization", `Bearer ${auth.access}`);
-              headers.delete("x-api-key");
-
-              // Remove headers injected by Node/Bun fetch that Claude Code doesn't send
-              headers.delete("sec-fetch-mode");
-              headers.delete("sec-fetch-site");
-              headers.delete("sec-fetch-dest");
-              headers.delete("accept-language");
-
-              // Ensure accept matches Claude Code
-              if (!headers.has("accept") || headers.get("accept") === "*/*") {
-                headers.set("accept", "application/json");
-              }
-
-              // Core identity headers
-              headers.set("user-agent", USER_AGENT);
-              headers.set("x-app", "cli");
-              headers.set("anthropic-version", ANTHROPIC_VERSION);
-              headers.set(
-                "anthropic-dangerous-direct-browser-access",
-                "true",
-              );
-
-              // Stainless SDK platform headers
-              for (const [k, v] of Object.entries(STAINLESS_HEADERS)) {
-                headers.set(k, v);
-              }
-              if (!headers.has("x-stainless-retry-count")) {
-                headers.set("x-stainless-retry-count", "0");
-              }
-              if (!headers.has("x-stainless-timeout")) {
-                headers.set("x-stainless-timeout", "600");
-              }
-
-              // Beta flags: merge required + oauth + any incoming
-              const incoming = (headers.get("anthropic-beta") || "")
-                .split(",")
-                .map((b) => b.trim())
-                .filter(Boolean);
-              const required = BETA_FLAGS.split(",").map((b) => b.trim());
-              const merged = [
-                ...new Set([
-                  ...required,
-                  OAUTH_BETA_FLAG,
-                  ...incoming,
-                ]),
-              ].join(",");
-              headers.set("anthropic-beta", merged);
 
               // --- Transform request body ---
               let body = init?.body;
               if (body && typeof body === "string") {
                 try {
                   const parsed = JSON.parse(body);
-
-                  // Sanitize system prompt
-                  if (parsed.system && Array.isArray(parsed.system)) {
-                    parsed.system = parsed.system.map(
-                      (item: { type?: string; text?: string }) => {
-                        if (item.type === "text" && item.text) {
-                          return {
-                            ...item,
-                            text: item.text
-                              .replace(/OpenCode/g, "Claude Code")
-                              .replace(/opencode/gi, "Claude"),
-                          };
-                        }
-                        return item;
-                      },
-                    );
-                  }
 
                   // Prefix tool definitions (avoid double-prefixing)
                   if (parsed.tools && Array.isArray(parsed.tools)) {
@@ -297,11 +234,14 @@ const AnthropicOAuthCombined = async ({ client }: { client: PluginClient }) => {
                     );
                   }
 
-                  // Prefix tool_use blocks in messages (avoid double-prefixing)
+                  // Prefix tool_use blocks in messages
                   if (parsed.messages && Array.isArray(parsed.messages)) {
                     parsed.messages = parsed.messages.map(
                       (msg: {
-                        content?: Array<{ type?: string; name?: string }>;
+                        content?: Array<{
+                          type?: string;
+                          name?: string;
+                        }>;
                       }) => {
                         if (msg.content && Array.isArray(msg.content)) {
                           msg.content = msg.content.map(
@@ -331,108 +271,12 @@ const AnthropicOAuthCombined = async ({ client }: { client: PluginClient }) => {
                 }
               }
 
-              // --- URL rewrite ---
-              let requestUrl: URL | null = null;
-              try {
-                if (typeof input === "string" || input instanceof URL) {
-                  requestUrl = new URL(input.toString());
-                } else if (input instanceof Request) {
-                  requestUrl = new URL(input.url);
-                }
-              } catch {
-                requestUrl = null;
-              }
+              const newInit = { ...init, body };
+              const response = await fetch(input, newInit);
 
-              if (
-                requestUrl &&
-                requestUrl.pathname === "/v1/messages" &&
-                !requestUrl.searchParams.has("beta")
-              ) {
-                requestUrl.searchParams.set("beta", "true");
-              }
-
-              const finalUrl = requestUrl
-                ? requestUrl.toString()
-                : input instanceof Request
-                  ? input.url
-                  : String(input);
-
-              // --- Request with 429 auto-refresh retry ---
-              const MAX_RETRIES = 3;
-              let response: Response;
-
-              for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-                const req = new Request(finalUrl, {
-                  method: init?.method || "POST",
-                  body,
-                  headers,
-                });
-
-                response = await fetch(req);
-
-                if (response.status !== 429 || attempt === MAX_RETRIES - 1) {
-                  break;
-                }
-
-                console.error(
-                  `[opencode-oauth] 429 (attempt ${attempt + 1}/${MAX_RETRIES}), refreshing...`,
-                );
-
-                try {
-                  let fresh: {
-                    access: string;
-                    refresh: string;
-                    expires: number;
-                  } | null = null;
-
-                  // Try keychain for a different token first
-                  const keychainTokens = getClaudeTokens();
-                  if (
-                    keychainTokens &&
-                    keychainTokens.access !== auth.access
-                  ) {
-                    fresh = keychainTokens;
-                    console.error(
-                      "[opencode-oauth] Got different token from keychain",
-                    );
-                  }
-
-                  // Fall back to OAuth refresh
-                  if (!fresh) {
-                    fresh = refreshTokens(auth.refresh!);
-                  }
-
-                  await client.auth.set({
-                    path: { id: "anthropic" },
-                    body: {
-                      type: "oauth",
-                      refresh: fresh.refresh,
-                      access: fresh.access,
-                      expires: fresh.expires,
-                    },
-                  });
-                  auth.access = fresh.access;
-                  headers.set("authorization", `Bearer ${fresh.access}`);
-                } catch (refreshErr) {
-                  console.error(
-                    `[opencode-oauth] 429 retry refresh failed: ${refreshErr}`,
-                  );
-                }
-
-                const retryAfter =
-                  parseInt(
-                    response.headers.get("retry-after") || "0",
-                    10,
-                  ) * 1000;
-                const delay =
-                  retryAfter ||
-                  1000 * Math.pow(2, attempt) + Math.random() * 1000;
-                await new Promise((r) => setTimeout(r, delay));
-              }
-
-              // --- Strip mcp_ prefix from streaming response ---
-              if (response!.body) {
-                const reader = response!.body.getReader();
+              // Strip mcp_ prefix from streaming response
+              if (response.body) {
+                const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 const encoder = new TextEncoder();
 
@@ -443,7 +287,6 @@ const AnthropicOAuthCombined = async ({ client }: { client: PluginClient }) => {
                       controller.close();
                       return;
                     }
-
                     let text = decoder.decode(value, { stream: true });
                     text = text.replace(
                       /"name"\s*:\s*"mcp_([^"]+)"/g,
@@ -454,13 +297,13 @@ const AnthropicOAuthCombined = async ({ client }: { client: PluginClient }) => {
                 });
 
                 return new Response(stream, {
-                  status: response!.status,
-                  statusText: response!.statusText,
-                  headers: response!.headers,
+                  status: response.status,
+                  statusText: response.statusText,
+                  headers: response.headers,
                 });
               }
 
-              return response!;
+              return response;
             },
           };
         }
@@ -471,7 +314,7 @@ const AnthropicOAuthCombined = async ({ client }: { client: PluginClient }) => {
       methods: [
         {
           label: "Claude Pro/Max",
-          type: "oauth",
+          type: "oauth" as const,
           authorize: async () => {
             // First try: auto-sync from Claude CLI (zero interaction)
             const tokens = getClaudeTokens();
@@ -480,7 +323,7 @@ const AnthropicOAuthCombined = async ({ client }: { client: PluginClient }) => {
                 "[opencode-oauth] Auto-authenticated via Claude CLI",
               );
               return {
-                type: "success",
+                type: "success" as const,
                 access: tokens.access,
                 refresh: tokens.refresh,
                 expires: tokens.expires,
@@ -495,7 +338,7 @@ const AnthropicOAuthCombined = async ({ client }: { client: PluginClient }) => {
             return {
               url,
               instructions: "Paste the authorization code here: ",
-              method: "code",
+              method: "code" as const,
               callback: async (code: string) => {
                 try {
                   const cleanCode = parseAuthCode(code);
@@ -504,7 +347,7 @@ const AnthropicOAuthCombined = async ({ client }: { client: PluginClient }) => {
                     verifier,
                   );
                   return {
-                    type: "success",
+                    type: "success" as const,
                     access: exchanged.access,
                     refresh: exchanged.refresh,
                     expires: exchanged.expires,
@@ -513,7 +356,7 @@ const AnthropicOAuthCombined = async ({ client }: { client: PluginClient }) => {
                   console.error(
                     `[opencode-oauth] Token exchange failed: ${err}`,
                   );
-                  return { type: "failed" };
+                  return { type: "failed" as const };
                 }
               },
             };
