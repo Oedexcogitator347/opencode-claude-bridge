@@ -56,7 +56,7 @@ export const USER_AGENT =
 // oauth-2025-04-20 is added separately only for OAuth auth
 export const BETA_FLAGS =
   process.env.ANTHROPIC_BETA_FLAGS ||
-  "interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,claude-code-20250219";
+  "interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,claude-code-20250219,effort-2025-11-24";
 
 export const OAUTH_BETA_FLAG = "oauth-2025-04-20";
 

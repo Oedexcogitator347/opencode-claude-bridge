@@ -4,10 +4,6 @@ Use your Claude Pro/Max subscription in [OpenCode](https://opencode.ai). If you'
 
 ## Install
 
-```bash
-npm install -g opencode-claude-bridge
-```
-
 Add to `~/.config/opencode/opencode.json`:
 
 ```json
@@ -16,7 +12,7 @@ Add to `~/.config/opencode/opencode.json`:
 }
 ```
 
-Select an Anthropic model, choose **Claude Pro/Max** when prompted, and you're in.
+OpenCode auto-installs the plugin from npm on next launch. Select an Anthropic model, choose **Claude Pro/Max** when prompted, and you're in.
 
 **From source:**
 
@@ -25,9 +21,11 @@ git clone https://github.com/dotCipher/opencode-claude-bridge.git ~/opencode-cla
 cd ~/opencode-claude-bridge && npm install && npm run build
 ```
 
+Then reference the full path in your config:
+
 ```json
 {
-  "plugin": ["~/opencode-claude-bridge/dist/index.js"]
+  "plugin": ["/Users/YOU/opencode-claude-bridge/dist/index.js"]
 }
 ```
 
@@ -42,9 +40,9 @@ The plugin sits between OpenCode and the Anthropic API:
 - **OAuth (Pro/Max)** — Auto-reads your Claude CLI's OAuth tokens from macOS Keychain (or `~/.claude/.credentials.json` on Linux). No browser flow needed. If Claude CLI isn't available, falls back to browser-based OAuth PKCE.
 - **API key** — Works alongside a standard `provider` entry in your OpenCode config with an `apiKey`. The plugin only activates its OAuth handling for the built-in `anthropic` provider; custom API key providers pass through unchanged.
 
-**Token refresh** — When tokens expire, three layers are tried in order: re-read from Keychain, refresh via stored token, refresh via CLI's token. On 429 rate limits, the token is refreshed and the request retried (up to 3 attempts).
+**Token refresh** — When tokens expire, three layers are tried: re-read from Keychain, refresh via stored token, refresh via CLI's token.
 
-**Request transformation** — Every outbound request is rewritten to match what Claude Code 2.1.81 actually sends: correct `user-agent`, `anthropic-beta` flags, `anthropic-version`, Stainless SDK headers, `?beta=true` URL parameter, `mcp_` tool name prefixing, and system prompt sanitization.
+**Request transformation** — Every outbound OAuth request is rewritten to match what Claude Code sends: correct headers, `?beta=true` URL parameter, `thinking` body field, `mcp_` tool name prefixing, and system prompt sanitization.
 
 ## Requirements
 
@@ -81,7 +79,7 @@ Key things that have changed across versions:
 
 ## Credits
 
-Combines approaches from [shahidshabbir-se/opencode-anthropic-oauth](https://github.com/shahidshabbir-se/opencode-anthropic-oauth), [ex-machina-co/opencode-anthropic-auth](https://github.com/ex-machina-co/opencode-anthropic-auth), [vinzabe/PERMANENT-opencode-anthropic-oauth-fix](https://github.com/vinzabe/PERMANENT-opencode-anthropic-oauth-fix), and [lehdqlsl/opencode-claude-auth-sync](https://github.com/lehdqlsl/opencode-claude-auth-sync).
+Combines approaches from [shahidshabbir-se/opencode-anthropic-oauth](https://github.com/shahidshabbir-se/opencode-anthropic-oauth), [ex-machina-co/opencode-anthropic-auth](https://github.com/ex-machina-co/opencode-anthropic-auth), [vinzabe/PERMANENT-opencode-anthropic-oauth-fix](https://github.com/vinzabe/PERMANENT-opencode-anthropic-oauth-fix), and [lehdqlsl/opencode-claude-auth-sync](https://github.com/lehdqlsl/opencode-claude-bridge).
 
 ## License
 

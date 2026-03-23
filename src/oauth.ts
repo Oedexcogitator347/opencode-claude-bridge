@@ -15,19 +15,12 @@ export interface OAuthTokens {
   expires: number;
 }
 
-/**
- * RFC 7636-compliant base64url encoding — unpadded.
- */
 function base64url(buf: Buffer): string {
   return buf.toString("base64url").replace(/=+$/, "");
 }
 
-function generateVerifier(): string {
-  return base64url(randomBytes(64));
-}
-
-function generateChallenge(verifier: string): string {
-  return base64url(createHash("sha256").update(verifier).digest());
+function sleep(ms: number): void {
+  execSync(`sleep ${(ms / 1000).toFixed(3)}`, { timeout: 60000 });
 }
 
 /**
@@ -63,13 +56,10 @@ function curlPost(
       console.error(
         `[opencode-oauth] Token endpoint 429 (attempt ${attempt + 1}/${retries}), retrying...`,
       );
-      const delay = 1000 * Math.pow(2, attempt) + Math.random() * 1000;
-      execSync(`sleep ${(delay / 1000).toFixed(3)}`, { timeout: 60000 });
     } catch (err) {
       if (attempt === retries - 1) throw err;
-      const delay = 1000 * Math.pow(2, attempt) + Math.random() * 1000;
-      execSync(`sleep ${(delay / 1000).toFixed(3)}`, { timeout: 60000 });
     }
+    sleep(1000 * Math.pow(2, attempt) + Math.random() * 1000);
   }
 
   return {
@@ -78,11 +68,27 @@ function curlPost(
   };
 }
 
+function parseTokenResponse(status: number, body: string, label: string): OAuthTokens {
+  if (status !== 200) {
+    throw new Error(`${label} failed (${status}): ${body}`);
+  }
+  const data = JSON.parse(body) as {
+    access_token: string;
+    refresh_token: string;
+    expires_in: number;
+  };
+  return {
+    access: data.access_token,
+    refresh: data.refresh_token,
+    expires: Date.now() + data.expires_in * 1000,
+  };
+}
+
 export function createAuthorizationRequest(
   redirectUri?: string,
 ): { url: string; verifier: string } {
-  const verifier = generateVerifier();
-  const challenge = generateChallenge(verifier);
+  const verifier = base64url(randomBytes(64));
+  const challenge = base64url(createHash("sha256").update(verifier).digest());
 
   const params = new URLSearchParams({
     code: "true",
@@ -101,9 +107,6 @@ export function createAuthorizationRequest(
   };
 }
 
-/**
- * Parse auth code from various input formats (vinzabe's robust parsing).
- */
 export function parseAuthCode(raw: string): string {
   let code = raw.trim();
 
@@ -137,22 +140,7 @@ export function exchangeCodeForTokens(
     redirect_uri: redirectUri || REDIRECT_URI,
     state: verifier,
   });
-
-  if (status !== 200) {
-    throw new Error(`Token exchange failed (${status}): ${body}`);
-  }
-
-  const data = JSON.parse(body) as {
-    access_token: string;
-    refresh_token: string;
-    expires_in: number;
-  };
-
-  return {
-    access: data.access_token,
-    refresh: data.refresh_token,
-    expires: Date.now() + data.expires_in * 1000,
-  };
+  return parseTokenResponse(status, body, "Token exchange");
 }
 
 export function refreshTokens(refreshToken: string): OAuthTokens {
@@ -161,20 +149,5 @@ export function refreshTokens(refreshToken: string): OAuthTokens {
     refresh_token: refreshToken,
     client_id: CLIENT_ID,
   });
-
-  if (status !== 200) {
-    throw new Error(`Token refresh failed (${status}): ${body}`);
-  }
-
-  const data = JSON.parse(body) as {
-    access_token: string;
-    refresh_token: string;
-    expires_in: number;
-  };
-
-  return {
-    access: data.access_token,
-    refresh: data.refresh_token,
-    expires: Date.now() + data.expires_in * 1000,
-  };
+  return parseTokenResponse(status, body, "Token refresh");
 }
