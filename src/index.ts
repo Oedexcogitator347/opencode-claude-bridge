@@ -178,12 +178,14 @@ const OpenCodeClaudeBridge = async ({ client }: { client: PluginClient }) => {
         process.env.ANTHROPIC_API_KEY = "oauth-placeholder";
 
         // Zero out cost for Pro/Max subscription
-        for (const model of Object.values(provider.models)) {
-          model.cost = { input: 0, output: 0, cache: { read: 0, write: 0 } };
+        if (provider?.models) {
+          for (const model of Object.values(provider.models)) {
+            model.cost = { input: 0, output: 0, cache: { read: 0, write: 0 } };
+          }
         }
 
         return {
-          authToken: auth.access,
+          ...(auth.access ? { authToken: auth.access } : {}),
 
           async fetch(input: string | URL | Request, init?: RequestInit) {
             const auth = await getAuth();
