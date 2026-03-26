@@ -278,8 +278,18 @@ const OpenCodeClaudeBridge = async ({ client }: { client: PluginClient }) => {
               try {
                 const parsed = JSON.parse(body);
 
-                // Required for interleaved-thinking beta (not supported on haiku)
-                if (!parsed.thinking && !parsed.model?.includes("haiku")) {
+                // Only inject adaptive thinking for models that support it.
+                // Use an explicit allowlist — haiku and older sonnet variants
+                // (e.g. claude-sonnet-4-5) reject the field entirely.
+                // claude-sonnet-4-6 and claude-opus-4-x are confirmed to support
+                // interleaved-thinking-2025-05-14.
+                const THINKING_MODELS = [
+                  "claude-opus-4",
+                  "claude-sonnet-4-6",
+                ];
+                const supportsThinking = parsed.model &&
+                  THINKING_MODELS.some((m: string) => parsed.model.includes(m));
+                if (!parsed.thinking && supportsThinking) {
                   parsed.thinking = { type: "adaptive" };
                 }
 
@@ -380,16 +390,36 @@ const OpenCodeClaudeBridge = async ({ client }: { client: PluginClient }) => {
             const finalUrl = requestUrl?.toString()
               ?? (input instanceof Request ? input.url : String(input));
 
-            // ── Request ──
+            // ── Request (with 429 auto-refresh retry) ──
             const outHeaders: Record<string, string> = {};
             headers.forEach((v, k) => { outHeaders[k] = v; });
 
-            const response = await globalThis.fetch(finalUrl, {
+            const doFetch = () => globalThis.fetch(finalUrl, {
               method: init?.method || "POST",
               body,
               headers: outHeaders,
               signal: init?.signal,
             });
+
+            let response = await doFetch();
+
+            // 429 auto-refresh: rate limits are per-access-token, so refreshing
+            // the token gives us a fresh rate limit bucket. Try up to 2 retries.
+            if (response.status === 429) {
+              for (let retry = 0; retry < 2; retry++) {
+                console.error(`[opencode-claude-bridge] 429 rate limited (attempt ${retry + 1}/2), refreshing token...`);
+                const freshToken = await refreshAuth(auth, client);
+                if (!freshToken) {
+                  console.error("[opencode-claude-bridge] Token refresh failed, returning 429");
+                  break;
+                }
+                outHeaders["authorization"] = `Bearer ${freshToken}`;
+                // Back off briefly: 1s first retry, 2s second
+                await new Promise((r) => setTimeout(r, 1000 * (retry + 1)));
+                response = await doFetch();
+                if (response.status !== 429) break;
+              }
+            }
 
             // ── Strip mcp_ prefix from streaming response ──
             if (!response.body) return response;

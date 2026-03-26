@@ -1,6 +1,6 @@
 {
   "name": "opencode-claude-bridge",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "OpenCode ↔ Claude bridge — keychain sync + PKCE OAuth + request transformation",
   "type": "module",
   "main": "dist/index.js",
@@ -11,7 +11,8 @@
   "scripts": {
     "build": "tsc",
     "prepublishOnly": "npm run build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test dist/index.test.js"
   },
   "keywords": [
     "opencode",
