@@ -1,3 +1,7 @@
+import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { hostname, userInfo } from "node:os";
+import { join } from "node:path";
 import {
   createAuthorizationRequest,
   exchangeCodeForTokens,
@@ -10,10 +14,25 @@ import {
   CLI_VERSION,
   OAUTH_BETA_FLAG,
   ANTHROPIC_VERSION,
+  BILLING_CCH,
   STAINLESS_HEADERS,
-  TOOL_PREFIX,
   USER_AGENT,
+  PROFILE_URL,
+  CLI_BUILD_ID,
+  ENTRYPOINT,
+  DEFAULT_EFFORT,
+  CLEAR_THINKING_TYPE,
+  SESSION_ID,
 } from "./constants.js";
+import {
+  getClaudeTools,
+  STUB_TOOL_NAMES,
+  SHARED_TOOL_NAMES,
+  translateArgsSnakeToCamel,
+  translateArgsCamelToSnake,
+  computeFingerprint,
+  extractFirstUserMessageText,
+} from "./claude-tools.js";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -33,6 +52,55 @@ type ProviderModel = {
   temperature?: boolean;
   limit?: { context: number; output: number };
   modalities?: { input: string[]; output: string[] };
+};
+
+type OAuthProfile = {
+  account?: { uuid?: string };
+};
+
+type ClaudeSystemPromptCache = {
+  system?: Array<{ type?: string; text?: string; cache_control?: unknown }>;
+  billing?: {
+    ccVersion?: string;
+    ccVersionSuffix?: string;
+    ccEntrypoint?: string;
+  };
+};
+
+const OUTBOUND_TOOL_NAME_MAP: Record<string, string> = {
+  bash: "Bash",
+  read: "Read",
+  glob: "Glob",
+  grep: "Grep",
+  edit: "Edit",
+  write: "Write",
+  task: "Agent",
+  webfetch: "WebFetch",
+  todowrite: "TodoWrite",
+  skill: "Skill",
+  mcp_bash: "Bash",
+  mcp_read: "Read",
+  mcp_glob: "Glob",
+  mcp_grep: "Grep",
+  mcp_edit: "Edit",
+  mcp_write: "Write",
+  mcp_task: "Agent",
+  mcp_webfetch: "WebFetch",
+  mcp_todowrite: "TodoWrite",
+  mcp_skill: "Skill",
+};
+
+const INBOUND_TOOL_NAME_MAP: Record<string, string> = {
+  Bash: "bash",
+  Read: "read",
+  Glob: "glob",
+  Grep: "grep",
+  Edit: "edit",
+  Write: "write",
+  Agent: "task",
+  WebFetch: "webfetch",
+  TodoWrite: "todowrite",
+  Skill: "skill",
 };
 
 const ANTHROPIC_MODELS: Record<string, ProviderModel> = {
@@ -85,7 +153,11 @@ type PluginClient = {
 // ── Helpers ────────────────────────────────────────────────────────
 
 const CLAUDE_PREFIX =
-  "You are Claude Code, Anthropic's official CLI for Claude.";
+  "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+
+const oauthProfileCache = new Map<string, Promise<OAuthProfile | null>>();
+const SYSTEM_PROMPT_CACHE_PATH = process.env.ANTHROPIC_SYSTEM_PROMPT_PATH
+  || join(process.env.HOME || "", ".cache", "opencode-claude-bridge", "claude-system-prompt.json");
 
 /** Persist fresh tokens to OpenCode's auth store. */
 async function storeAuth(
@@ -158,9 +230,11 @@ function mergeHeaders(target: Headers, source: HeadersInit) {
 
 /** Build deduplicated beta flags string. */
 function buildBetaFlags(existing: string): string {
-  const incoming = existing.split(",").map((b) => b.trim()).filter(Boolean);
-  const required = BETA_FLAGS.split(",").map((b) => b.trim());
-  return [...new Set([...required, OAUTH_BETA_FLAG, ...incoming])].join(",");
+  const required = BETA_FLAGS.split(",").map((b) => b.trim()).filter(Boolean);
+  const withoutSpecials = required.filter(
+    (beta) => beta !== "claude-code-20250219" && beta !== OAUTH_BETA_FLAG,
+  );
+  return ["claude-code-20250219", OAUTH_BETA_FLAG, ...withoutSpecials].join(",");
 }
 
 /** Deduplicate repeated Claude Code prefix in a text block. */
@@ -172,12 +246,134 @@ function deduplicatePrefix(text: string): string {
   return text;
 }
 
+function mapOutboundToolName(name: string | undefined): string | undefined {
+  if (!name) return name;
+  return OUTBOUND_TOOL_NAME_MAP[name] || name;
+}
+
+function maybeUnquoteText(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("\"")) return text;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed === "string") return parsed;
+  } catch {}
+  return text;
+}
+
+function normalizeSystemBlocks(
+  system: Array<{ type?: string; text?: string }>,
+): Array<{ type?: string; text?: string }> {
+  const normalized = system.map((item) => {
+    if (item.type === "text" && item.text) {
+      return {
+        ...item,
+        text: deduplicatePrefix(
+          item.text
+            .replace(/OpenCode/g, "Claude Code")
+            .replace(/opencode/gi, "Claude"),
+        ),
+      };
+    }
+    return item;
+  });
+
+  const billing = normalized[0];
+  const prompt = normalized[1];
+  if (
+    billing?.type === "text"
+    && billing.text?.startsWith("x-anthropic-billing-header:")
+    && prompt?.type === "text"
+    && prompt.text?.startsWith(`${CLAUDE_PREFIX}\n\n`)
+  ) {
+    const rest = prompt.text.slice(`${CLAUDE_PREFIX}\n\n`.length);
+    return [
+      billing,
+      { ...prompt, text: CLAUDE_PREFIX },
+      { ...prompt, text: rest },
+      ...normalized.slice(2),
+    ];
+  }
+
+  return normalized;
+}
+
+function readCachedClaudePromptCache(): ClaudeSystemPromptCache | null {
+  try {
+    const raw = readFileSync(SYSTEM_PROMPT_CACHE_PATH, "utf8");
+    const parsed = JSON.parse(raw) as ClaudeSystemPromptCache;
+    if (!Array.isArray(parsed.system) || parsed.system.length === 0) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function getStableDeviceId(): string {
+  let who = "unknown";
+  try {
+    who = `${userInfo().username}@${hostname()}`;
+  } catch {
+    try {
+      who = `${process.env.USER || process.env.USERNAME || "unknown"}@${hostname()}`;
+    } catch {}
+  }
+  return createHash("sha256").update(who).digest("hex");
+}
+
+function buildBillingHeader(
+  sessionId: string,
+  cachedClaudePromptCache: ClaudeSystemPromptCache | null,
+  dynamicFingerprint?: string,
+): string {
+  const cch = BILLING_CCH
+    || createHash("sha256").update(sessionId).digest("hex").slice(0, 5);
+  // Prefer dynamic fingerprint (computed per-request from first user message)
+  // over static cached value, matching Claude Code's actual behavior.
+  const suffix = dynamicFingerprint
+    || cachedClaudePromptCache?.billing?.ccVersionSuffix
+    || CLI_BUILD_ID;
+  const ccVersion = cachedClaudePromptCache?.billing?.ccVersion
+    || `${CLI_VERSION}.${suffix}`;
+  const ccEntrypoint = cachedClaudePromptCache?.billing?.ccEntrypoint || ENTRYPOINT;
+  return `x-anthropic-billing-header: cc_version=${ccVersion}; cc_entrypoint=${ccEntrypoint}; cch=${cch};`;
+}
+
+async function fetchOAuthProfile(accessToken: string): Promise<OAuthProfile | null> {
+  const cached = oauthProfileCache.get(accessToken);
+  if (cached) return cached;
+
+  const pending = (async () => {
+    try {
+      const response = await globalThis.fetch(PROFILE_URL, {
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+          "content-type": "application/json",
+          "user-agent": USER_AGENT,
+          "anthropic-beta": OAUTH_BETA_FLAG,
+        },
+      });
+      if (!response.ok) return null;
+      return await response.json() as OAuthProfile;
+    } catch {
+      return null;
+    }
+  })();
+
+  oauthProfileCache.set(accessToken, pending);
+  return pending;
+}
+
 // ── Plugin ─────────────────────────────────────────────────────────
 
 const OpenCodeClaudeBridge = async ({ client }: { client: PluginClient }) => {
   // Save and clear ANTHROPIC_API_KEY so SDK doesn't bypass our fetch.
   // Restored if OAuth isn't active (API key providers still work).
   const savedApiKey = process.env.ANTHROPIC_API_KEY;
+  const sessionId = SESSION_ID || randomUUID();
+  const deviceId = getStableDeviceId();
+  const cachedClaudePromptCache = readCachedClaudePromptCache();
+  const cachedClaudeSystem = cachedClaudePromptCache?.system || null;
 
   // Bootstrap auth from Claude CLI keychain at plugin init time — before
   // OpenCode builds its provider state. This ensures the loader runs on
@@ -246,8 +442,9 @@ const OpenCodeClaudeBridge = async ({ client }: { client: PluginClient }) => {
         process.env.ANTHROPIC_API_KEY = "oauth-placeholder";
 
         return {
-          ...(auth.access ? { authToken: auth.access } : {}),
-
+          // OpenCode 1.4.0 now rejects Anthropic provider config when both an
+          // apiKey and authToken are present. Keep the placeholder apiKey for
+          // provider init, and let the fetch wrapper supply the real bearer token.
           async fetch(input: string | URL | Request, init?: RequestInit) {
             const auth = await getAuth();
             if (auth.type !== "oauth") return fetch(input, init);
@@ -263,8 +460,11 @@ const OpenCodeClaudeBridge = async ({ client }: { client: PluginClient }) => {
 
             headers.set("authorization", `Bearer ${auth.access}`);
             headers.delete("x-api-key");
+            headers.delete("x-session-affinity");
+            if (!headers.has("accept")) headers.set("accept", "application/json");
             headers.set("user-agent", USER_AGENT);
             headers.set("x-app", "cli");
+            headers.set("x-claude-code-session-id", sessionId);
             headers.set("anthropic-version", ANTHROPIC_VERSION);
             headers.set("anthropic-dangerous-direct-browser-access", "true");
             for (const [k, v] of Object.entries(STAINLESS_HEADERS)) headers.set(k, v);
@@ -303,69 +503,121 @@ const OpenCodeClaudeBridge = async ({ client }: { client: PluginClient }) => {
                   parsed.temperature = 1;
                 }
 
-                // Inject billing header as first system block (required for OAuth)
                 if (!parsed.system) parsed.system = [];
+                if (!parsed.context_management) {
+                  parsed.context_management = {
+                    edits: [{ type: CLEAR_THINKING_TYPE, keep: "all" }],
+                  };
+                }
+                if (!parsed.output_config) {
+                  parsed.output_config = { effort: DEFAULT_EFFORT };
+                }
+
+                const profile = auth.access
+                  ? await fetchOAuthProfile(auth.access)
+                  : null;
+                if (!parsed.metadata) parsed.metadata = {};
+                if (!parsed.metadata.user_id && profile?.account?.uuid) {
+                  parsed.metadata.user_id = JSON.stringify({
+                    device_id: deviceId,
+                    account_uuid: profile.account.uuid,
+                    session_id: sessionId,
+                  });
+                }
+
+                // Compute dynamic fingerprint from the first user message
+                // (matches Claude Code's per-request fingerprint behavior).
+                let dynamicFingerprint: string | undefined;
+                if (parsed.messages && Array.isArray(parsed.messages)) {
+                  const firstText = extractFirstUserMessageText(parsed.messages);
+                  if (firstText) {
+                    dynamicFingerprint = computeFingerprint(firstText);
+                  }
+                }
+
+                // Inject billing header as first system block (required for OAuth).
                 const hasBilling = parsed.system.some(
                   (s: { text?: string }) =>
                     s.text?.startsWith("x-anthropic-billing-header:"),
                 );
+                let billingHeader = buildBillingHeader(sessionId, cachedClaudePromptCache, dynamicFingerprint);
                 if (!hasBilling) {
-                  // Generate content hash matching Claude CLI's format
-                  const sysContent = parsed.system
-                    .map((s: { text?: string }) => s.text || "")
-                    .join("");
-                  const { createHash } = await import("node:crypto");
-                  const hash = createHash("sha256")
-                    .update(sysContent)
-                    .digest("hex");
                   parsed.system.unshift({
                     type: "text",
-                    text: `x-anthropic-billing-header: cc_version=${CLI_VERSION}.${hash.slice(0, 3)}; cc_entrypoint=cli; cch=${hash.slice(0, 5)};`,
+                    text: billingHeader,
                   });
+                } else {
+                  billingHeader = parsed.system[0]?.text || billingHeader;
                 }
 
-                // Sanitize system prompt
-                if (parsed.system && Array.isArray(parsed.system)) {
-                  parsed.system = parsed.system.map(
-                    (item: { type?: string; text?: string }) => {
-                      if (item.type === "text" && item.text) {
-                        return {
-                          ...item,
-                          text: deduplicatePrefix(
-                            item.text
-                              .replace(/OpenCode/g, "Claude Code")
-                              .replace(/opencode/gi, "Claude"),
-                          ),
-                        };
-                      }
-                      return item;
-                    },
-                  );
+                // If we have a locally captured Claude Code system prompt, prefer it.
+                if (cachedClaudeSystem) {
+                  parsed.system = [
+                    { type: "text", text: billingHeader },
+                    ...cachedClaudeSystem,
+                  ];
+                } else if (parsed.system && Array.isArray(parsed.system)) {
+                  // Otherwise keep the existing prompt but shape it closer to Claude Code.
+                  parsed.system = normalizeSystemBlocks(parsed.system);
                 }
 
-                // Prefix tool names with mcp_
-                if (parsed.tools && Array.isArray(parsed.tools)) {
-                  parsed.tools = parsed.tools.map(
-                    (tool: { name?: string }) => ({
-                      ...tool,
-                      name: tool.name && !tool.name.startsWith(TOOL_PREFIX)
-                        ? `${TOOL_PREFIX}${tool.name}` : tool.name,
-                    }),
-                  );
-                }
+                // Replace OpenCode's tool definitions with Claude Code's exact
+                // wire-captured definitions (matching descriptions, schemas,
+                // parameter names, and ordering).
+                parsed.tools = getClaudeTools();
+                delete parsed.tool_choice;
 
-                // Prefix tool_use blocks in messages
+                // Normalize message content blocks:
+                // - Translate tool names (OpenCode → Claude Code)
+                // - Translate tool_use input arguments (camelCase → snake_case)
+                // - Clean up text blocks
                 if (parsed.messages && Array.isArray(parsed.messages)) {
                   for (const msg of parsed.messages) {
                     if (!Array.isArray(msg.content)) continue;
                     for (const block of msg.content) {
-                      if (
-                        block.type === "tool_use" &&
-                        block.name &&
-                        !block.name.startsWith(TOOL_PREFIX)
-                      ) {
-                        block.name = `${TOOL_PREFIX}${block.name}`;
+                      if (block.type === "text" && typeof block.text === "string") {
+                        block.text = maybeUnquoteText(block.text);
+                        delete block.cache_control;
                       }
+                      if (block.type === "tool_use" && block.name) {
+                        block.name = mapOutboundToolName(block.name);
+                        // Translate arguments from OpenCode's camelCase to Claude's snake_case
+                        if (block.input && typeof block.input === "object") {
+                          block.input = translateArgsCamelToSnake(
+                            block.name,
+                            block.input as Record<string, unknown>,
+                          );
+                          // Agent: translate OpenCode subagent_type values → Claude values
+                          if (block.name === "Agent" && typeof (block.input as Record<string, unknown>).subagent_type === "string") {
+                            const agentMap: Record<string, string> = {
+                              build: "general-purpose",
+                              explore: "Explore",
+                              plan: "Plan",
+                            };
+                            const cur = (block.input as Record<string, unknown>).subagent_type as string;
+                            if (agentMap[cur]) {
+                              (block.input as Record<string, unknown>).subagent_type = agentMap[cur];
+                            }
+                          }
+                          // TodoWrite: translate OpenCode fields → Claude fields
+                          // OpenCode: { content, status, priority } with status ∈ {pending, in_progress, completed, cancelled}
+                          // Claude:   { content, status, activeForm } with status ∈ {pending, in_progress, completed}
+                          if (block.name === "TodoWrite" && Array.isArray((block.input as Record<string, unknown>).todos)) {
+                            for (const item of (block.input as Record<string, unknown>).todos as Array<Record<string, unknown>>) {
+                              if (item.priority && !item.activeForm) {
+                                item.activeForm = item.priority;
+                                delete item.priority;
+                              }
+                              // Map "cancelled" → "completed" (Claude doesn't have cancelled)
+                              if (item.status === "cancelled") {
+                                item.status = "completed";
+                              }
+                            }
+                          }
+                        }
+                      }
+                      // tool_result blocks reference tool names via tool_use_id,
+                      // no name translation needed here.
                     }
                   }
                 }
@@ -384,6 +636,9 @@ const OpenCodeClaudeBridge = async ({ client }: { client: PluginClient }) => {
               );
             } catch {}
 
+            if (requestUrl?.pathname === "/messages") {
+              requestUrl.pathname = "/v1/messages";
+            }
             if (requestUrl?.pathname === "/v1/messages" && !requestUrl.searchParams.has("beta")) {
               requestUrl.searchParams.set("beta", "true");
             }
@@ -421,12 +676,16 @@ const OpenCodeClaudeBridge = async ({ client }: { client: PluginClient }) => {
               }
             }
 
-            // ── Strip mcp_ prefix from streaming response ──
+            // ── Map Claude-style tool names and arguments back to OpenCode ──
             if (!response.body) return response;
 
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             const encoder = new TextEncoder();
+
+            // Track the current tool name for argument translation in
+            // streamed tool_use content_block_start / input_json_delta events.
+            let currentToolName = "";
 
             return new Response(
               new ReadableStream({
@@ -434,7 +693,75 @@ const OpenCodeClaudeBridge = async ({ client }: { client: PluginClient }) => {
                   const { done, value } = await reader.read();
                   if (done) { controller.close(); return; }
                   let text = decoder.decode(value, { stream: true });
-                  text = text.replace(/"name"\s*:\s*"mcp_([^"]+)"/g, '"name": "$1"');
+
+                  // Map tool names: Claude Code → OpenCode
+                  text = text.replace(/"name"\s*:\s*"([^"]+)"/g, (_match, name: string) => {
+                    // Track current tool for argument translation
+                    if (SHARED_TOOL_NAMES.has(name) || STUB_TOOL_NAMES.has(name)) {
+                      currentToolName = name;
+                    }
+                    const mapped = INBOUND_TOOL_NAME_MAP[name];
+                    return mapped
+                      ? `"name": "${mapped}"`
+                      : `"name": "${name}"`;
+                  });
+
+                  // Translate snake_case argument keys to camelCase in
+                  // streamed tool input JSON. The model streams tool arguments
+                  // as partial JSON in input_json_delta events. We translate
+                  // known keys on the fly.
+                  if (currentToolName) {
+                    // file_path → filePath
+                    text = text.replace(/"file_path"\s*:/g, () => {
+                      if (currentToolName === "Edit" || currentToolName === "Read" || currentToolName === "Write") {
+                        return '"filePath":';
+                      }
+                      return '"file_path":';
+                    });
+                    // old_string → oldString
+                    text = text.replace(/"old_string"\s*:/g, '"oldString":');
+                    // new_string → newString
+                    text = text.replace(/"new_string"\s*:/g, '"newString":');
+                    // replace_all → replaceAll
+                    text = text.replace(/"replace_all"\s*:/g, '"replaceAll":');
+                    // glob → include (for Grep only)
+                    if (currentToolName === "Grep") {
+                      text = text.replace(/"glob"\s*:/g, '"include":');
+                    }
+                    // TodoWrite: activeForm → priority
+                    // Claude sends { content, status, activeForm }, OpenCode
+                    // requires { content, status, priority }. Since OpenCode
+                    // validates priority as z.string() (no enum), any string
+                    // value is accepted — the activeForm text works fine.
+                    if (currentToolName === "TodoWrite") {
+                      text = text.replace(/"activeForm"\s*:/g, '"priority":');
+                    }
+                    // Agent: translate Claude's subagent_type values to OpenCode's.
+                    // Claude uses "general-purpose", "Explore", "Plan", "statusline-setup".
+                    // OpenCode has "build" (default) and "plan" as built-in agents.
+                    // We match the full key:value pair to avoid replacing these
+                    // strings inside prompt/description text.
+                    if (currentToolName === "Agent") {
+                      text = text.replace(
+                        /"subagent_type"\s*:\s*"(general-purpose|statusline-setup|Explore|Plan)"/g,
+                        (_m, val: string) => {
+                          const map: Record<string, string> = {
+                            "general-purpose": "build",
+                            "statusline-setup": "build",
+                            "Explore": "explore",
+                            "Plan": "plan",
+                          };
+                          return `"subagent_type": "${map[val] || val}"`;
+                        },
+                      );
+                    }
+                  }
+
+                  // Reset tool name tracking on content_block_stop
+                  if (text.includes('"content_block_stop"')) {
+                    currentToolName = "";
+                  }
+
                   controller.enqueue(encoder.encode(text));
                 },
               }),

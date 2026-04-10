@@ -56,7 +56,7 @@ The plugin sits between OpenCode and the Anthropic API:
 
 **Token refresh** — When tokens expire, three layers are tried: re-read from Keychain, refresh via stored token, refresh via CLI's token.
 
-**Request transformation** — Every outbound OAuth request is rewritten to match what Claude Code sends: correct headers, `?beta=true` URL parameter, `thinking` body field, `mcp_` tool name prefixing, and system prompt sanitization.
+**Request transformation** — Every outbound OAuth request is rewritten to match what Claude Code sends as closely as possible: current headers, `?beta=true` URL parameter, `thinking`, `context_management`, `output_config`, session metadata, `mcp_` tool name prefixing, and system prompt sanitization.
 
 ## Requirements
 
@@ -67,7 +67,7 @@ The plugin sits between OpenCode and the Anthropic API:
 
 ## Environment overrides
 
-All OAuth and header parameters can be overridden via environment variables (`ANTHROPIC_CLIENT_ID`, `ANTHROPIC_TOKEN_URL`, `ANTHROPIC_AUTHORIZE_URL`, `ANTHROPIC_CLI_VERSION`, `ANTHROPIC_BETA_FLAGS`). Defaults match Claude Code 2.1.81 — most users won't need to change these.
+All OAuth and header parameters can be overridden via environment variables (`ANTHROPIC_CLIENT_ID`, `ANTHROPIC_TOKEN_URL`, `ANTHROPIC_AUTHORIZE_URL`, `ANTHROPIC_CLI_VERSION`, `ANTHROPIC_CLI_BUILD_ID`, `ANTHROPIC_ENTRYPOINT`, `ANTHROPIC_SDK_VERSION`, `ANTHROPIC_BETA_FLAGS`, `ANTHROPIC_BILLING_CCH`, `ANTHROPIC_SYSTEM_PROMPT_PATH`). Defaults match Claude Code 2.1.98 — most users won't need to change these.
 
 ## Updating for new Claude CLI versions
 
@@ -84,6 +84,36 @@ Key things that have changed across versions:
 - Body fields (`thinking`, `metadata`, `context_management`)
 - `user-agent` version string
 - `x-stainless-package-version`
+- `x-claude-code-session-id`
+- billing header shape (`cc_version`, `cc_entrypoint`, `cch`)
+
+## Local validation
+
+To validate how local OpenCode traffic is being classified and how closely it matches Claude Code on the wire:
+
+```bash
+npm run validate:oauth -- --model claude-sonnet-4-6 --prompt "Reply with exactly VALIDATE."
+```
+
+The validator will:
+
+- query the OAuth usage endpoint before and after each run
+- capture an official Claude Code request through a local proxy
+- capture an OpenCode request using this repo's local `dist/index.js`
+- write Claude Code's captured system prompt to `~/.cache/opencode-claude-bridge/claude-system-prompt.json`
+- save request and response artifacts under `tmp/validate-*`
+- write a `report.json` with request diffs, body hashes, and usage snapshots
+
+After the first successful validator run, the bridge will automatically reuse that cached Claude Code system prompt. This is currently the key step that makes OpenCode traffic behave like standard Claude Code usage on this machine.
+
+If OpenCode is being treated as an OAuth app / extra-usage flow, the report will usually show it in one of two ways:
+
+- the OpenCode run fails with an extra-usage style API error
+- the usage buckets diverge from the Claude Code run even when the headers look similar
+
+## Important limitation
+
+Anthropic's own Claude Code docs say third-party integrations should use API key authentication. This bridge can make OAuth requests look much closer to current Claude Code traffic, but Anthropic may still apply server-side classification that a bridge cannot fully control.
 
 ## Credits
 
